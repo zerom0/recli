@@ -1,9 +1,14 @@
-use std::fs::File;
-use std::io::Write;
-use chrono::DateTime;
+use std::fs;
+
+use chrono::prelude::*;
 use clap::{Parser, Subcommand};
-use reqwest::blocking::Client;
-use serde::{Deserialize, Serialize};
+use log::info;
+
+use tablet::remarkable_entry::RemarkableEntry;
+
+use crate::tablet::Tablet;
+
+mod tablet;
 
 #[derive(Parser)]
 #[clap(author, version, about, long_about = None)]
@@ -17,114 +22,142 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Check connection to reMarkable
-    Status {},
     /// List files on reMarkable
     List {
         #[clap(short, long, action)]
         recursive: bool,
-        #[clap(default_value_t = String::from("documents/"), value_parser)]
+        #[clap(default_value_t = String::new(), value_parser)]
+        path: String,
+    },
+    /// Retrieve a document rendered as PDF file from the reMarkable
+    Get {
+        /// Fully qualified path to the document
         path: String,
     },
     /// Synchronize rendered files from reMarkable
-    Sync {},
-    /// Store a file on the reMarkable
-    Add {},
-    /// Retrieve a file from the reMarkable
-    Get {
-        file_name: String,
-        id: String,
+    Sync {
+        #[clap(default_value_t = String::new(), value_parser)]
+        path: String,
     },
+    /// Store a PDF document on the reMarkable
+    Add {},
     /// Delete a file from the reMarkable
     Remove {},
     /// Backup the reMarkable content to an archive
     Backup {},
-    /// Erase the reMarkable content
-    Erase {},
     /// Restore the reMarkable content from an archive
     Restore {},
+    /// Erase the reMarkable content
+    Erase {},
     /// Install a template
     Template {},
 }
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    env_logger::init();
+
     let cli = Cli::parse();
 
-    // You can check for the existence of subcommands, and if found use their
-    // matches just as you would the top level cmd
-    let result = match &cli.command {
-        Commands::Status { } => todo!(),
-        Commands::List { recursive, path } =>
-            list(*recursive, &cli.address, path, &String::new()),
-        Commands::Sync { } => todo!(),
-        Commands::Add { } => todo!(),
-        Commands::Get { file_name, id } => get(&cli.address, file_name, id),
-        Commands::Remove { } => todo!(),
-        Commands::Backup { } => todo!(),
-        Commands::Erase { } => todo!(),
-        Commands::Restore { } => todo!(),
-        Commands::Template { } => todo!(),
-    };
+    let t = tablet::Tablet::create(&cli.address);
+    let remarkable_content = RemarkableEntry::Collection { name: ".".to_string(), entries: t.discover("documents/")? };
 
-    if let Err(msg) = result {
-        println!("Error: {}", msg);
+    match &cli.command {
+        Commands::List { recursive, path } =>
+            list(remarkable_content.subentry(path).ok_or(String::from("Path not found"))?, path.as_str(), *recursive),
+        Commands::Get { path } =>
+            get(&t, &remarkable_content, "", path.as_str()),
+        Commands::Sync { path } =>
+            recursive_get(&t, remarkable_content.subentry(path).ok_or(String::from("Path not found"))?, path.as_str()),
+        Commands::Add {} =>
+            todo!(),
+        Commands::Remove {} =>
+            todo!(),
+        Commands::Backup {} =>
+            todo!(),
+        Commands::Restore {} =>
+            todo!(),
+        Commands::Erase {} =>
+            todo!(),
+        Commands::Template {} =>
+            todo!(),
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
-struct Entry {
-    #[serde(rename = "VissibleName")]
-    visible_name: String,
-    #[serde(rename = "Type")]
-    r#type: String,
-    #[serde(rename = "ID")]
-    id: String,
-    #[serde(rename = "fileType")]
-    file_type: Option<String>,
-//    pageCount: Option<u32>,
-    #[serde(rename = "ModifiedClient")]
-    modified_client: String,
-//    sizeInBytes: String,
-}
-
-enum _RemarkableEntry {
-    Collection {
-        name: String,
-        id: String,
-    },
-    Item {
-        name: String,
-        id: String,
-    },
-}
-
-fn list(recursive: bool, address: &String, path: &String, readable_path: &String) -> Result<(), String> {
-    let client = Client::new();
-    let body : String = client.post(format!("http://{}/{}", address, path))
-        .send().map_err(|e| e.to_string())?
-        .text().map_err(|e| e.to_string())?;
-    let entries : Vec<Entry> = serde_json::from_str(body.as_str()).map_err(|e| e.to_string())?;
-    for entry in entries.iter() {
-        if recursive && entry.r#type == "CollectionType" {
-            let new_path = format!("{}{}/", path, entry.id);
-            let new_readable_path = format!("{}{}/", readable_path, entry.visible_name);
-            list(recursive, address, &new_path, &new_readable_path)?;
+fn list(entries: &RemarkableEntry, prefix: &str, recursive: bool) -> Result<(), Box<dyn std::error::Error>> {
+    if let RemarkableEntry::Collection { name: _, entries } = entries {
+        if entries.is_empty() {
+            println!("{}/", prefix);
         } else {
-            let rfc3339 = DateTime::parse_from_rfc3339(entry.modified_client.as_str()).map_err(|e| e.to_string())?;
-            println!("{} /{}{}{}  -> {}", rfc3339.format(" \u{1F4C5}%Y-%m-%d \u{1F551}%H:%M:%S"), readable_path, entry.visible_name, if entry.r#type == "CollectionType" { "/" } else { "" }, entry.id);
+            for entry in entries {
+                match entry {
+                    RemarkableEntry::Item { name, modified, .. } => println!("{}/{} {} [pdf]", prefix, name, modified),
+                    RemarkableEntry::Collection { name, .. } =>
+                        if recursive { list(entry, format!("{}/{}", prefix, name).as_str(), recursive)? } else { println!("{}/{}/", prefix, name) },
+                }
+            }
         }
     }
     Ok(())
 }
 
-fn get(address: &String, file_name: &String, id: &String) -> Result<(), String> {
-    // http://10.11.99.1/download/aa889098-2e7f-45f8-b8de-be4dbb964aa7/placeholder
-    let client = Client::new();
-    let response = client.get(format!("http://{}/download/{}/placeholder", address, id))
-        .send().map_err(|e| e.to_string())?;
-    let body = response.bytes().map_err(|e| e.to_string())?;
+fn get(tablet: &Tablet, content: &RemarkableEntry, prefix: &str, path: &str) -> Result<(), Box<dyn std::error::Error>> {
+    match content.subentry(path) {
+        Some(RemarkableEntry::Item { modified, pages, .. }) => {
+            let local_file_path = format!("/{}/{}.pdf", prefix, path).trim_start_matches('/').to_string();
+            eprint!(" * {}", local_file_path);
 
-    let mut file = File::create(file_name).map_err(|e| e.to_string())?;
-    file.write_all(body.as_ref()).map_err(|e| e.to_string())?;
+            // let local_file_path = format!("{}.pdf", name);
+            if version_exists(&local_file_path, modified) {
+                eprintln!(" [unmodified]");
+                return Ok(());
+            }
+
+            eprint!(" (fetching {} pages ..)", pages);
+            let start = Utc::now();
+            let document = tablet.get(content, path)?;
+            fs::create_dir_all(local_file_path.rsplit_once('/').unwrap_or(("", "")).0)?;
+            fs::write(local_file_path, document.as_ref())?;
+            let duration = Utc::now().signed_duration_since(start);
+            eprintln!(" [done]");
+            info!("Download ({} Bytes) took {} ms", document.len(), duration.num_milliseconds());
+        }
+        Some(RemarkableEntry::Collection { .. }) => {
+            panic!("Cannot get a collection");
+        }
+        _ => {
+            panic!("No such file");
+        }
+    }
+
     Ok(())
 }
+
+
+/// Tests if the local file exists and is newer or the same age as the timestamp
+fn version_exists(local_file_path: &str, timestamp: &DateTime<Utc>) -> bool {
+    if let Ok(metadata) = fs::metadata(&local_file_path) {
+        if let Ok(modified) = metadata.modified() {
+            let local_timestamp: DateTime<Utc> = modified.into();
+            *timestamp <= local_timestamp
+        } else {
+            false
+        }
+    } else {
+        false
+    }
+}
+
+fn recursive_get(tablet: &Tablet, content: &RemarkableEntry, prefix: &str) -> Result<(), Box<dyn std::error::Error>> {
+    if let RemarkableEntry::Collection { name: _, entries } = content {
+        for entry in entries {
+            // debug!("{:?}", entry);
+            match entry {
+                RemarkableEntry::Item { name, .. } => get(tablet, content, prefix, name)?,
+                RemarkableEntry::Collection { name, .. } =>
+                    recursive_get(tablet, entry, format!("{}/{}", prefix, name).as_str())?,
+            }
+        }
+    }
+    Ok(())
+}
+
