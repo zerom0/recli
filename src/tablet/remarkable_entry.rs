@@ -71,24 +71,24 @@ mod tests {
         let entries = RemarkableEntry::Collection {
             name: "Documents".to_string(),
             entries: vec![
-                RemarkableEntry::Item { name: "Notes".to_string(), id: "0815".to_string(), modified: "".to_string() },
+                RemarkableEntry::Item { name: "Notes".to_string(), id: "0815".to_string(), modified: Utc::now(), pages: 0, size: 0 },
                 RemarkableEntry::Collection { name: "EmptyCollection".to_string(), entries: Vec::new() },
                 RemarkableEntry::Collection {
                     name: "Collection".to_string(),
                     entries: vec![
-                        RemarkableEntry::Item { name: "Project".to_string(), id: "4711".to_string(), modified: "".to_string() },
+                        RemarkableEntry::Item { name: "Project".to_string(), id: "4711".to_string(), modified: Utc::now(), pages: 0, size: 0 },
                     ],
                 },
             ],
         };
-        assert!(matches!(entries.subentry(""), Some(RemarkableEntry::Collection { name, entries: _ }) if name == "Documents"));
-        assert!(matches!(entries.subentry("/"), Some(RemarkableEntry::Collection { name, entries: _ }) if name == "Documents"));
-        assert!(matches!(entries.subentry("Notes"), Some(RemarkableEntry::Item {name: _, id, modified: _}) if id == "0815"));
-        assert!(matches!(entries.subentry("Notes/"), Some(RemarkableEntry::Item {name: _, id, modified: _}) if id == "0815"));
+        assert!(matches!(entries.subentry(""), Some(RemarkableEntry::Collection { name, .. }) if name == "Documents"));
+        assert!(matches!(entries.subentry("/"), Some(RemarkableEntry::Collection { name, .. }) if name == "Documents"));
+        assert!(matches!(entries.subentry("Notes"), Some(RemarkableEntry::Item {id, ..}) if id == "0815"));
+        assert!(matches!(entries.subentry("Notes/"), Some(RemarkableEntry::Item {id, ..}) if id == "0815"));
         assert!(matches!(entries.subentry("Notes/Notes"), None));
-        assert!(matches!(entries.subentry("EmptyCollection"), Some(RemarkableEntry::Collection {name, entries: _}) if name == "EmptyCollection"));
-        assert!(matches!(entries.subentry("Collection"), Some(RemarkableEntry::Collection {name, entries: _}) if name == "Collection"));
-        assert!(matches!(entries.subentry("Collection/"), Some(RemarkableEntry::Collection {name, entries: _}) if name == "Collection"));
-        assert!(matches!(entries.subentry("Collection/Project"), Some(RemarkableEntry::Item {name: _, id, modified: _}) if id == "4711"));
+        assert!(matches!(entries.subentry("EmptyCollection"), Some(RemarkableEntry::Collection {name, ..}) if name == "EmptyCollection"));
+        assert!(matches!(entries.subentry("Collection"), Some(RemarkableEntry::Collection {name, ..}) if name == "Collection"));
+        assert!(matches!(entries.subentry("Collection/"), Some(RemarkableEntry::Collection {name, ..}) if name == "Collection"));
+        assert!(matches!(entries.subentry("Collection/Project"), Some(RemarkableEntry::Item {id, ..}) if id == "4711"));
     }
 }
